@@ -1,0 +1,92 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model SemesterStatus {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  player        Player   @relation(fields: [playerId], references: [id])
+  playerId      String   @db.ObjectId
+  semester      Semester @relation(fields: [semesterId], references: [id])
+  semesterId    String   @db.ObjectId
+  isElonStudent Boolean
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([playerId, semesterId])
+}
+
+model SemesterScore {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  player          Player   @relation(fields: [playerId], references: [id])
+  playerId        String   @db.ObjectId
+  semester        Semester @relation(fields: [semesterId], references: [id])
+  semesterId      String   @db.ObjectId
+  totalScore      Float
+  tournamentCount Int
+  averageScore    Float
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([playerId, semesterId])
+}
+
+model Player {
+  id              String           @id @default(auto()) @map("_id") @db.ObjectId
+  startggPlayerId String           @unique
+  gamerTag        String
+  semesterStatuses SemesterStatus[]
+  semesterScores   SemesterScore[]
+  participations   Participation[]
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+}
+
+model Tournament {
+  id                    String         @id @default(auto()) @map("_id") @db.ObjectId
+  startggId             String         @unique
+  name                  String
+  startAt               DateTime
+  semester              Semester       @relation(fields: [semesterId], references: [id])
+  semesterId            String         @db.ObjectId
+  totalParticipants     Int
+  totalElonParticipants Int
+  weight                Float
+  participations        Participation[]
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+}
+
+model Participation {
+  id           String     @id @default(auto()) @map("_id") @db.ObjectId
+  player       Player     @relation(fields: [playerId], references: [id])
+  playerId     String     @db.ObjectId
+  tournament   Tournament @relation(fields: [tournamentId], references: [id])
+  tournamentId String     @db.ObjectId
+  placement    Int
+  score        Float
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([playerId, tournamentId])
+}
+
+model Semester {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String   @unique
+  startDate DateTime
+  endDate   DateTime
+  totalElonStudentsParticipated Int              @default(0)
+  tournaments                  Tournament[]
+  semesterScores               SemesterScore[]
+  semesterStatuses             SemesterStatus[]
+  createdAt                    DateTime         @default(now())
+  updatedAt                    DateTime         @updatedAt
+}
