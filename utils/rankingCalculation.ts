@@ -1,6 +1,13 @@
 import prisma from "@/lib/prisma";
 import { formatInTimeZone } from "@/utils/semesterUtils";
 
+interface PlayerScore {
+  totalScore: number;
+  tournamentCount: number;
+  gamerTag: string;
+  playerId: string;
+}
+
 export async function calculateAndUpdateRankings(semesterId: string) {
   console.log(`Starting ranking calculation for semester: ${semesterId}`);
   try {
@@ -33,15 +40,7 @@ export async function calculateAndUpdateRankings(semesterId: string) {
       data: { totalElonStudentsParticipated: totalElonStudents },
     });
 
-    const playerScores: Record<
-      string,
-      {
-        totalScore: number;
-        tournamentCount: number;
-        gamerTag: string;
-        playerId: string;
-      }
-    > = {};
+    const playerScores: Record<string, PlayerScore> = {};
 
     for (const tournament of tournaments) {
       const elonParticipants = tournament.participations.filter((p) =>
@@ -69,16 +68,16 @@ export async function calculateAndUpdateRankings(semesterId: string) {
           data: { score: score },
         });
 
-        if (!playerScores[participation.player.startggPlayerId]) {
-          playerScores[participation.player.startggPlayerId] = {
+        if (!playerScores[participation.player.id]) {
+          playerScores[participation.player.id] = {
             totalScore: 0,
             tournamentCount: 0,
             gamerTag: participation.player.gamerTag,
             playerId: participation.player.id,
           };
         }
-        playerScores[participation.player.startggPlayerId].totalScore += score;
-        playerScores[participation.player.startggPlayerId].tournamentCount += 1;
+        playerScores[participation.player.id].totalScore += score;
+        playerScores[participation.player.id].tournamentCount += 1;
 
         // console.log(
         //   `Processed participation - Player: ${
@@ -97,11 +96,11 @@ export async function calculateAndUpdateRankings(semesterId: string) {
     });
 
     // Create new semester scores
-    for (const [startggPlayerId, scores] of Object.entries(playerScores)) {
+    for (const [playerId, scores] of Object.entries(playerScores)) {
       const averageScore = scores.totalScore / scores.tournamentCount;
       await prisma.semesterScore.create({
         data: {
-          playerId: scores.playerId,
+          playerId: playerId,
           semesterId: semesterId,
           totalScore: scores.totalScore,
           tournamentCount: scores.tournamentCount,
@@ -109,13 +108,13 @@ export async function calculateAndUpdateRankings(semesterId: string) {
         },
       });
 
-      //   console.log(
-      //     `Created score for player ${
-      //       scores.gamerTag
-      //     } (startggPlayerId: ${startggPlayerId}): Average Score: ${averageScore.toFixed(
-      //       2
-      //     )}, Tournament Count: ${scores.tournamentCount}`
-      //   );
+      // console.log(
+      //   `Created score for player ${
+      //     scores.gamerTag
+      //   } (playerId: ${playerId}): Average Score: ${averageScore.toFixed(
+      //     2
+      //   )}, Tournament Count: ${scores.tournamentCount}`
+      // );
     }
 
     const updatedRankings = await prisma.semesterScore.findMany({

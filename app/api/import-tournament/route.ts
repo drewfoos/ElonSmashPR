@@ -1,69 +1,48 @@
-// File: app/api/import-tournament/route.ts
 import { NextResponse } from "next/server";
 import { importTournament } from "@/utils/tournamentImport";
 import { getSemesterForDate } from "@/utils/semesterUtils";
-import { v4 as uuidv4 } from "uuid";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { isManualImport, ...data } = body;
+    let tournamentData;
 
-    if (isManualImport) {
-      return handleManualImport(data);
+    if (body.isManualImport) {
+      // Handle manual import
+      const { name, date, participants } = body;
+      const startDate = new Date(date);
+      const semester = getSemesterForDate(startDate);
+      const semesterName = semester ? semester.name : "Unknown Semester";
+
+      tournamentData = {
+        id: Date.now(), // Generate a unique ID for manual tournaments
+        name,
+        startAt: startDate.toISOString(),
+        participants: participants.map((p: any) => ({
+          startggPlayerId: p.playerId || null,
+          gamerTag: p.gamerTag,
+          placement: p.placement,
+          isElonStudent: p.isElonStudent,
+        })),
+        semesterName,
+      };
     } else {
-      return handleAutoImport(data.slug);
+      // Handle Start.gg import
+      const { slug } = body;
+      tournamentData = await importTournament(slug);
     }
+
+    // At this point, tournamentData should have the same structure for both manual and Start.gg imports
+
+    return NextResponse.json(tournamentData);
   } catch (error) {
     console.error("Error importing tournament:", error);
-    const errorMessage =
-      error instanceof Error ? error.message : "An unknown error occurred";
     return NextResponse.json(
-      { error: "Failed to import tournament", details: errorMessage },
+      {
+        error: "Failed to import tournament",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 }
     );
   }
-}
-
-async function handleAutoImport(slug: string) {
-  if (!slug) {
-    return NextResponse.json(
-      { error: "Tournament slug is required" },
-      { status: 400 }
-    );
-  }
-
-  const tournamentData = await importTournament(slug);
-  return NextResponse.json(tournamentData);
-}
-
-async function handleManualImport(data: any) {
-  const { name, date, participants } = data;
-
-  // Convert date string to Date object
-  const tournamentDate = new Date(date);
-
-  // Determine semester
-  const semester = getSemesterForDate(tournamentDate);
-  if (!semester) {
-    return NextResponse.json(
-      { error: "Unable to determine semester for the given date" },
-      { status: 400 }
-    );
-  }
-
-  const processedData = {
-    id: `manual-${uuidv4()}`,
-    name,
-    startAt: tournamentDate.toISOString(),
-    participants: participants.map((p: any) => ({
-      startggPlayerId: `manual-${uuidv4()}`,
-      gamerTag: p.gamerTag,
-      placement: p.placement,
-      isElonStudent: p.isElonStudent,
-    })),
-    semesterName: semester.name,
-  };
-
-  return NextResponse.json(processedData);
 }

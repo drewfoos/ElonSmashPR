@@ -201,7 +201,9 @@ export default function Dashboard() {
                 Import Tournament
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-4xl w-full">
+              {" "}
+              {/* Increased max-width */}
               <DialogHeader>
                 <DialogTitle>Import New Tournament</DialogTitle>
                 <DialogDescription>

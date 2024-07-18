@@ -22,14 +22,21 @@ export interface TournamentData {
   semesterName: string;
 }
 
+interface Player {
+  id: string;
+  name: string;
+}
+
 interface ParticipantConfirmationProps {
   tournamentData: TournamentData;
   onConfirm: (confirmedData: TournamentData) => Promise<void>;
+  currentElonStudents: Player[];
 }
 
 export default function ParticipantConfirmation({
   tournamentData,
   onConfirm,
+  currentElonStudents,
 }: ParticipantConfirmationProps) {
   const [participants, setParticipants] = useState<Participant[]>(
     tournamentData.participants
@@ -37,32 +44,19 @@ export default function ParticipantConfirmation({
   const { toast } = useToast();
 
   useEffect(() => {
-    fetchCurrentElonStudents();
-  }, []);
+    updateElonStudentStatus();
+  }, [currentElonStudents]);
 
-  const fetchCurrentElonStudents = async () => {
-    try {
-      const response = await fetch("/api/current-elon-students");
-      const currentStudents: { id: string; name: string }[] =
-        await response.json();
-
-      setParticipants((prev) =>
-        prev.map((participant) => ({
-          ...participant,
-          isElonStudent:
-            currentStudents.some(
-              (student) => student.id === participant.startggPlayerId
-            ) || participant.isElonStudent,
-        }))
-      );
-    } catch (error) {
-      console.error("Failed to fetch current Elon students:", error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch current Elon students. Please try again.",
-        variant: "destructive",
-      });
-    }
+  const updateElonStudentStatus = () => {
+    setParticipants((prev) =>
+      prev.map((participant) => ({
+        ...participant,
+        isElonStudent:
+          currentElonStudents.some(
+            (student) => student.id === participant.startggPlayerId
+          ) || participant.isElonStudent,
+      }))
+    );
   };
 
   const handleCheckboxChange = (startggPlayerId: string) => {

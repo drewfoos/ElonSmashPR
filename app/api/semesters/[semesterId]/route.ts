@@ -1,9 +1,9 @@
-// File: app/api/rankings/[semesterId]/route.ts
+// File: app/api/semesters/[semesterId]/route.ts
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
 export async function GET(
-  request: Request,
+  _request: Request,
   { params }: { params: { semesterId: string } }
 ) {
   try {
