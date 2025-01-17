@@ -186,7 +186,7 @@ export default function Rankings({
                     </TableCell>
                     <TableCell>{ranking.playerName}</TableCell>
                     <TableCell className="text-center">
-                      {ranking.averageScore.toFixed(2)}
+                      {ranking.averageScore.toFixed(3)}
                     </TableCell>
                     <TableCell className="text-center">
                       {ranking.tournamentCount}

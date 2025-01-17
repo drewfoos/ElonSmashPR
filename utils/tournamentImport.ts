@@ -2,7 +2,6 @@ import { gql } from "graphql-request";
 import { graphQLClient } from "@/lib/graphql-client";
 import { getSemesterForDate } from "@/utils/semesterUtils";
 
-// Define types for the GraphQL response
 interface TournamentQueryResponse {
   tournament: {
     id: string;
@@ -11,7 +10,15 @@ interface TournamentQueryResponse {
     events: Array<{
       id: string;
       name: string;
+      phases: Array<{
+        id: string;
+        name: string;
+      }>;
       standings: {
+        pageInfo: {
+          total: number;
+          totalPages: number;
+        };
         nodes: Array<{
           placement: number;
           entrant: {
@@ -29,7 +36,7 @@ interface TournamentQueryResponse {
 }
 
 const TOURNAMENT_QUERY = gql`
-  query TournamentQuery($slug: String!) {
+  query TournamentQuery($slug: String!, $page: Int!) {
     tournament(slug: $slug) {
       id
       name
@@ -37,7 +44,15 @@ const TOURNAMENT_QUERY = gql`
       events {
         id
         name
-        standings(query: { page: 1, perPage: 200 }) {
+        phases {
+          id
+          name
+        }
+        standings(query: { page: $page, perPage: 500, sortBy: "standing" }) {
+          pageInfo {
+            total
+            totalPages
+          }
           nodes {
             placement
             entrant {
@@ -57,67 +72,146 @@ const TOURNAMENT_QUERY = gql`
 
 export async function importTournament(slug: string) {
   try {
-    // Extract the slug if a full URL is provided
-    const tournamentSlug = slug.split("/").pop() || slug;
+    // Extract the tournament slug from the URL properly
+    let tournamentSlug = slug;
+    if (slug.includes("start.gg")) {
+      const parts = slug.split("/tournament/");
+      if (parts[1]) {
+        tournamentSlug = parts[1].split("/")[0];
+      }
+    }
 
-    console.log(`Attempting to fetch tournament with slug: ${tournamentSlug}`);
-    const tournamentData = await graphQLClient.request<TournamentQueryResponse>(
+    console.log("Original URL:", slug);
+    console.log("Extracted tournament slug:", tournamentSlug);
+
+    // First query to get tournament info and total pages
+    const initialData = await graphQLClient.request<TournamentQueryResponse>(
       TOURNAMENT_QUERY,
-      { slug: tournamentSlug }
+      { slug: tournamentSlug, page: 1 }
     );
 
-    // console.log(
-    //   "Tournament data fetched successfully:",
-    //   JSON.stringify(tournamentData, null, 2)
-    // );
-
-    if (!tournamentData.tournament) {
+    if (!initialData.tournament) {
       throw new Error("Tournament not found");
     }
 
-    const tournament = tournamentData.tournament;
-    const event = tournament.events[0]; // Assuming we're interested in the first event
+    const tournament = initialData.tournament;
 
-    if (!event) {
-      throw new Error("No events found for this tournament");
+    // Log all available events first
+    console.log(
+      "Available events:",
+      tournament.events.map((e) => ({
+        name: e.name,
+        id: e.id,
+        phasesCount: e.phases?.length || 0,
+      }))
+    );
+
+    let event;
+    // If there's only one event, use it
+    if (tournament.events.length === 1) {
+      event = tournament.events[0];
+      console.log("Only one event found, using:", event.name);
+    } else {
+      // Otherwise, find the matching event
+      event = tournament.events.find((e) => {
+        const name = e.name.toLowerCase();
+        return (
+          name === "smash ultimate" ||
+          name.includes("ultimate singles") ||
+          name.includes("smash singles") ||
+          (name.includes("ultimate") && !name.includes("doubles")) ||
+          name.includes("ult singles") ||
+          (name.includes("smash") && name.includes("singles")) ||
+          (name.includes("smash summit") && !name.includes("doubles")) ||
+          (name.includes("summit") && !name.includes("doubles")) ||
+          (name.includes("elon") &&
+            name.includes("summit") &&
+            !name.includes("doubles")) ||
+          name.includes("singles") // More general singles check
+        );
+      });
     }
 
-    //console.log(`Processing ${event.standings.nodes.length} participants`);
-    const participants = event.standings.nodes.map((node) => {
-      const participant = {
-        startggPlayerId: String(node.entrant.participants[0].player.id), // Convert to string
-        gamerTag: node.entrant.participants[0].player.gamerTag,
-        placement: node.placement,
-        isElonStudent: false,
-      };
-      //console.log(`Processed participant: ${JSON.stringify(participant)}`);
-      return participant;
-    });
+    if (!event) {
+      throw new Error(
+        "No suitable Ultimate Singles event found for this tournament"
+      );
+    }
 
-    //console.log(`Processed ${participants.length} participants`);
+    console.log("Selected event:", event.name);
+    console.log("Number of phases:", event.phases?.length || 0);
+
+    // Get total pages from pageInfo
+    const totalPages = event.standings.pageInfo.totalPages;
+    console.log(`Total pages of standings: ${totalPages}`);
+
+    let allParticipants = [...event.standings.nodes];
+
+    // Fetch remaining pages if there are any
+    if (totalPages > 1) {
+      console.log(
+        `Fetching ${totalPages - 1} additional pages of participants...`
+      );
+      for (let page = 2; page <= totalPages; page++) {
+        console.log(`Fetching page ${page} of ${totalPages}`);
+        const pageData = await graphQLClient.request<TournamentQueryResponse>(
+          TOURNAMENT_QUERY,
+          { slug: tournamentSlug, page }
+        );
+
+        if (pageData.tournament?.events[0]?.standings?.nodes) {
+          allParticipants = [
+            ...allParticipants,
+            ...pageData.tournament.events[0].standings.nodes,
+          ];
+        }
+      }
+    }
+
+    console.log(`Total participants found: ${allParticipants.length}`);
+
+    const participants = allParticipants
+      .map((node) => {
+        if (!node?.entrant?.participants?.[0]?.player) {
+          console.warn("Missing player data for a participant");
+          return null;
+        }
+
+        return {
+          startggPlayerId: String(node.entrant.participants[0].player.id || ''),
+          gamerTag: node.entrant.participants[0].player.gamerTag || 'Unknown Player',
+          placement: node.placement || 0,
+          isElonStudent: false,
+        };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null);
+
+    if (participants.length === 0) {
+      throw new Error("No valid participants found");
+    }
 
     // Convert startAt from Unix timestamp to Date
     const startDate = new Date(parseInt(tournament.startAt) * 1000);
-
-    // Determine semester name
     const semester = getSemesterForDate(startDate);
     const semesterName = semester ? semester.name : "Unknown Semester";
 
-    const result = {
+    console.log(
+      `Successfully processed ${participants.length} participants from event: ${event.name}`
+    );
+
+    return {
       id: parseInt(tournament.id, 10),
       name: tournament.name,
-      startAt: startDate.toISOString(), // Convert to ISO string for easier handling
+      startAt: startDate.toISOString(),
       participants,
       semesterName: semesterName,
     };
-
-    //console.log("Final result:", JSON.stringify(result, null, 2));
-    return result;
   } catch (error: unknown) {
-    console.error("Error importing tournament:", error);
-    if (error instanceof Error) {
-      throw new Error(`Failed to import tournament: ${error.message}`);
-    }
-    throw new Error("An unknown error occurred while importing the tournament");
+    console.error("Error importing tournament:", {
+      error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error;
   }
 }
