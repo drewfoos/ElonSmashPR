@@ -41,6 +41,7 @@ export default function ParticipantConfirmation({
   const [participants, setParticipants] = useState<Participant[]>(
     tournamentData.participants
   );
+  const [isConfirming, setIsConfirming] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -71,8 +72,10 @@ export default function ParticipantConfirmation({
 
   const handleConfirm = async () => {
     try {
+      setIsConfirming(true);
       await onConfirm({ ...tournamentData, participants });
-      // Any additional logic after confirmation
+      // If onConfirm completes successfully, it will close the dialog
+      // so we don't need to set isConfirming back to false here
     } catch (error) {
       console.error("Error confirming tournament:", error);
       toast({
@@ -80,6 +83,7 @@ export default function ParticipantConfirmation({
         description: "Failed to confirm tournament. Please try again.",
         variant: "destructive",
       });
+      setIsConfirming(false);
     }
   };
 
@@ -101,6 +105,7 @@ export default function ParticipantConfirmation({
                 onCheckedChange={() =>
                   handleCheckboxChange(participant.startggPlayerId)
                 }
+                disabled={isConfirming}
               />
               <label
                 htmlFor={participant.startggPlayerId}
@@ -111,8 +116,19 @@ export default function ParticipantConfirmation({
             </div>
           ))}
         </ScrollArea>
-        <Button onClick={handleConfirm} className="mt-4">
-          Confirm and Import Tournament
+        <Button 
+          onClick={handleConfirm} 
+          className="mt-4" 
+          disabled={isConfirming}
+        >
+          {isConfirming ? (
+            <div className="flex items-center gap-2">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              <span>Confirming...</span>
+            </div>
+          ) : (
+            "Confirm and Import Tournament"
+          )}
         </Button>
       </CardContent>
     </Card>

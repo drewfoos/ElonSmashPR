@@ -32,7 +32,10 @@ export async function POST(request: Request) {
       `Number of participants: ${tournamentData.participants.length}`
     );
 
+    // Convert date and get semester
     const estStartDate = convertToEST(new Date(tournamentData.startAt));
+    
+    // Find or create the semester - just once at the beginning
     let semester = await prisma.semester.findUnique({
       where: { name: tournamentData.semesterName },
     });
@@ -51,70 +54,102 @@ export async function POST(request: Request) {
       });
     }
 
+    // Count Elon participants for tournament metadata
     const elonParticipants = tournamentData.participants.filter(
       (p) => p.isElonStudent
     );
     const totalElonParticipants = elonParticipants.length;
     const totalParticipants = tournamentData.participants.length;
 
-    // Update or create players and their semester statuses
-    for (const participant of tournamentData.participants) {
-      let player;
+    // Create lookup data structures to reduce database queries
+    const playerLookup = new Map<string, { id: string; gamerTag: string }>();
+    
+    // Process players and semester statuses in batches
+    console.log("Processing players and semester statuses...");
+    const BATCH_SIZE = 10;
+    
+    // Split into batches to avoid overwhelming MongoDB
+    for (let i = 0; i < tournamentData.participants.length; i += BATCH_SIZE) {
+      const participantBatch = tournamentData.participants.slice(i, i + BATCH_SIZE);
+      
+      await prisma.$transaction(async (tx) => {
+        for (const participant of participantBatch) {
+          // Use our lookup map to avoid duplicate processing
+          const lookupKey = participant.startggPlayerId || participant.gamerTag;
+          
+          if (!playerLookup.has(lookupKey)) {
+            let player;
+            
+            if (participant.startggPlayerId) {
+              // If startggPlayerId is provided, use it to find or create the player
+              player = await tx.player.upsert({
+                where: { startggPlayerId: participant.startggPlayerId },
+                update: {
+                  gamerTag: participant.gamerTag,
+                  updatedAt: new Date(),
+                },
+                create: {
+                  startggPlayerId: participant.startggPlayerId,
+                  gamerTag: participant.gamerTag,
+                  createdAt: new Date(),
+                  updatedAt: new Date(),
+                },
+              });
+            } else {
+              // If no startggPlayerId, find by gamerTag or create new
+              player = await tx.player.findFirst({
+                where: { gamerTag: participant.gamerTag },
+              });
 
-      if (participant.startggPlayerId) {
-        // If startggPlayerId is provided, use it to find or create the player
-        player = await prisma.player.upsert({
-          where: { startggPlayerId: participant.startggPlayerId },
-          update: {
-            gamerTag: participant.gamerTag,
-            updatedAt: new Date(),
-          },
-          create: {
-            startggPlayerId: participant.startggPlayerId,
-            gamerTag: participant.gamerTag,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          },
-        });
-      } else {
-        // If no startggPlayerId, create a new player or use an existing one with the same gamerTag
-        player = await prisma.player.findFirst({
-          where: { gamerTag: participant.gamerTag },
-        });
-
-        if (!player) {
-          player = await prisma.player.create({
-            data: {
-              gamerTag: participant.gamerTag,
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            },
-          });
+              if (!player) {
+                player = await tx.player.create({
+                  data: {
+                    gamerTag: participant.gamerTag,
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                  },
+                });
+              }
+            }
+            
+            // Store in our lookup for future reference
+            playerLookup.set(lookupKey, { 
+              id: player.id, 
+              gamerTag: player.gamerTag 
+            });
+            
+            // Create/update semester status
+            await tx.semesterStatus.upsert({
+              where: {
+                playerId_semesterId: {
+                  playerId: player.id,
+                  semesterId: semester.id,
+                },
+              },
+              update: {
+                isElonStudent: participant.isElonStudent,
+                updatedAt: new Date(),
+              },
+              create: {
+                playerId: player.id,
+                semesterId: semester.id,
+                isElonStudent: participant.isElonStudent,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              },
+            });
+          }
         }
-      }
-
-      await prisma.semesterStatus.upsert({
-        where: {
-          playerId_semesterId: {
-            playerId: player.id,
-            semesterId: semester.id,
-          },
-        },
-        update: {
-          isElonStudent: participant.isElonStudent,
-          updatedAt: new Date(),
-        },
-        create: {
-          playerId: player.id,
-          semesterId: semester.id,
-          isElonStudent: participant.isElonStudent,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        },
       });
+      
+      // Add a small delay between batches for MongoDB free tier
+      if (i + BATCH_SIZE < tournamentData.participants.length) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
     }
 
-    // Upsert the tournament
+    // Create the tournament
+    console.log("Creating tournament record...");
     const tournament = await prisma.tournament.create({
       data: {
         startggId: tournamentData.id.toString(),
@@ -123,18 +158,18 @@ export async function POST(request: Request) {
         semesterId: semester.id,
         totalParticipants: totalParticipants,
         totalElonParticipants: totalElonParticipants,
-        weight: 0, // This will be calculated in calculateAndUpdateRankings
+        weight: 0, // Will be calculated later
       },
     });
 
-    // Create participations for all participants
+    // Prepare all participation data first
+    console.log("Creating participation records...");
+    const participationData = [];
+    
     for (const participant of tournamentData.participants) {
-      const player = await prisma.player.findFirst({
-        where: participant.startggPlayerId
-          ? { startggPlayerId: participant.startggPlayerId }
-          : { gamerTag: participant.gamerTag },
-      });
-
+      const lookupKey = participant.startggPlayerId || participant.gamerTag;
+      const player = playerLookup.get(lookupKey);
+      
       if (!player) {
         console.error(
           `Player not found for ${
@@ -143,22 +178,49 @@ export async function POST(request: Request) {
         );
         continue;
       }
-
-      await prisma.participation.create({
-        data: {
-          playerId: player.id,
-          tournamentId: tournament.id,
-          placement: participant.placement,
-          score: 0, // This will be calculated in calculateAndUpdateRankings
-        },
+      
+      participationData.push({
+        playerId: player.id,
+        tournamentId: tournament.id,
+        placement: participant.placement,
+        score: 0, // Will be calculated later
       });
+    }
+    
+    // Create participations in batches
+    for (let i = 0; i < participationData.length; i += BATCH_SIZE) {
+      const batch = participationData.slice(i, i + BATCH_SIZE);
+      
+      await prisma.$transaction(async (tx) => {
+        for (const data of batch) {
+          await tx.participation.create({
+            data: data
+          });
+        }
+      });
+      
+      // Add a small delay between batches
+      if (i + BATCH_SIZE < participationData.length) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
     }
 
     console.log("All participants processed. Calculating rankings...");
 
+    // Send initial status update via SSE
+    sendSSEUpdate(
+      JSON.stringify({
+        type: "rankingProgress",
+        semesterId: semester.id,
+        message: "Starting ranking calculation...",
+        percentage: 0
+      })
+    );
+
+    // Calculate rankings
     const updatedRankings = await calculateAndUpdateRankings(semester.id);
 
-    // Emit SSE event
+    // Send final update
     sendSSEUpdate(
       JSON.stringify({
         type: "tournamentConfirmed",
